@@ -13,7 +13,7 @@ from google.genai import types as genai_types
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.environ["8534935152:AAGqctHMHC5-1o2LF28xZgRkBRS26flhHpU"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 MODEL_NAME = "gemini-3.5-flash-lite"
