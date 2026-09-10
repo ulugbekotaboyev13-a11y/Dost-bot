@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 
-MODEL_NAME = "google/gemini-2.0-flash-exp:free"
+MODEL_NAME = "openrouter/free"
 
 SYSTEM_PROMPT = (
     "Sen 'Do'st bot' nomli sun'iy intellekt yordamchisisan. Foydalanuvchilar bilan "
