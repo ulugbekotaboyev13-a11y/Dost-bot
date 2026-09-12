@@ -2,13 +2,14 @@ import asyncio
 import logging
 import os
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
 from openai import OpenAI
+from faster_whisper import WhisperModel
 
 logging.basicConfig(level=logging.INFO)
 
@@ -30,6 +31,7 @@ SYSTEM_PROMPT = (
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_KEY)
+whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
 
 user_histories: dict[int, list] = {}
 
@@ -47,6 +49,28 @@ async def handle_start(message: Message) -> None:
         "Salom! Men Do'st bot 👋\n"
         "Istalgan savolingizni yozavering — birga suhbatlashamiz😊."
     )
+
+
+@dp.message(F.voice)
+async def handle_voice(message: Message) -> None:
+    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    file = await bot.get_file(message.voice.file_id)
+    file_path = f"/tmp/{message.voice.file_id}.ogg"
+    await bot.download_file(file.file_path, destination=file_path)
+
+    try:
+        segments, _ = await asyncio.to_thread(
+            whisper_model.transcribe, file_path, language="uz"
+        )
+        text = " ".join(seg.text for seg in segments).strip()
+        text = text or "Ovozli xabarni tushunolmadim 🙁"
+    except Exception:
+        logging.exception("Ovozni matnga aylantirishda xatolik")
+        text = "Uzr, ovozli xabarni qayta ishlashda muammo bo'ldi."
+    finally:
+        os.remove(file_path)
+
+    await message.answer(f"📝 {text}")
 
 
 @dp.message()
@@ -81,5 +105,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
-    
+    asyncio.run(main())        
