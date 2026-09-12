@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import Message, FSInputFile
 
 from openai import OpenAI
 from faster_whisper import WhisperModel
@@ -68,9 +68,76 @@ async def handle_voice(message: Message) -> None:
         logging.exception("Ovozni matnga aylantirishda xatolik")
         text = "Uzr, ovozli xabarni qayta ishlashda muammo bo'ldi."
     finally:
-        os.remove(file_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
     await message.answer(f"📝 {text}")
+
+
+@dp.message(F.video)
+async def handle_video(message: Message) -> None:
+    await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_VIDEO)
+    file = await bot.get_file(message.video.file_id)
+    video_path = f"/tmp/{message.video.file_id}.mp4"
+    audio_path = f"/tmp/{message.video.file_id}.wav"
+    ass_path = f"/tmp/{message.video.file_id}.ass"
+    output_path = f"/tmp/{message.video.file_id}_out.mp4"
+
+    await bot.download_file(file.file_path, destination=video_path)
+
+    try:
+        await message.answer("Video tahlil qilinyapti, biroz kuting ⏳")
+
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", video_path, "-ar", "16000", "-ac", "1", audio_path,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+
+        segments, _ = await asyncio.to_thread(
+            whisper_model.transcribe, audio_path, language="uz"
+        )
+        segments = list(segments)
+
+        def fmt_time(t):
+            h, m = int(t // 3600), int((t % 3600) // 60)
+            s, cs = int(t % 60), int((t % 1) * 100)
+            return f"{h}:{m:02}:{s:02}.{cs:02}"
+
+        ass_header = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 720
+PlayResY: 1280
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginV
+Style: Default,Arial,52,&H00FFFFFF,&H00000000,1,1,3,0,2,60
+
+[Events]
+Format: Layer, Start, End, Style, Text
+"""
+        events = "".join(
+            f"Dialogue: 0,{fmt_time(seg.start)},{fmt_time(seg.end)},Default,{seg.text.strip()}\n"
+            for seg in segments
+        )
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_header + events)
+
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", video_path, "-vf", f"ass={ass_path}",
+            "-c:a", "copy", output_path,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+
+        await message.answer_video(FSInputFile(output_path), caption="📝 Tayyor!")
+    except Exception:
+        logging.exception("Videoni qayta ishlashda xatolik")
+        await message.answer("Uzr, videoni qayta ishlashda muammo bo'ldi.")
+    finally:
+        for p in (video_path, audio_path, ass_path, output_path):
+            if os.path.exists(p):
+                os.remove(p)
 
 
 @dp.message()
