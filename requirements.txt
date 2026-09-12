@@ -1,2 +1,3 @@
 aiogram
 openai
+faster-whisper
