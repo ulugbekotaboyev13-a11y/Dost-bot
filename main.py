@@ -6,10 +6,13 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.filters import CommandStart
-from aiogram.types import Message, FSInputFile
+from aiogram.types import Message, FSInputFile, CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from openai import OpenAI
 from faster_whisper import WhisperModel
+from deep_translator import GoogleTranslator
+import edge_tts
 
 logging.basicConfig(level=logging.INFO)
 
@@ -34,6 +37,66 @@ client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_
 whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
 
 user_histories: dict[int, list] = {}
+# Foydalanuvchi yuborgan videoning vaqtincha yo'li shu yerda saqlanadi
+user_videos: dict[int, str] = {}
+
+# Dublyaj uchun qo'llab-quvvatlanadigan tillar va ovoz nomlari (edge-tts)
+VOICE_MAP = {
+    "uz": ("🇺🇿 O'zbekcha", "uz-UZ-SardorNeural"),
+    "en": ("🇬🇧 English", "en-US-GuyNeural"),
+    "ru": ("🇷🇺 Русский", "ru-RU-DmitryNeural"),
+    "tr": ("🇹🇷 Türkçe", "tr-TR-AhmetNeural"),
+    "ar": ("🇸🇦 العربية", "ar-SA-HamedNeural"),
+    "es": ("🇪🇸 Español", "es-ES-AlvaroNeural"),
+    "id": ("🇮🇩 Indonesia", "id-ID-ArdiNeural"),
+    "fr": ("🇫🇷 Français", "fr-FR-HenriNeural"),
+    "de": ("🇩🇪 Deutsch", "de-DE-ConradNeural"),
+    "it": ("🇮🇹 Italiano", "it-IT-DiegoNeural"),
+    "pt": ("🇵🇹 Português", "pt-PT-DuarteNeural"),
+    "pt-br": ("🇧🇷 Português (BR)", "pt-BR-AntonioNeural"),
+    "zh": ("🇨🇳 中文", "zh-CN-YunxiNeural"),
+    "ja": ("🇯🇵 日本語", "ja-JP-KeitaNeural"),
+    "ko": ("🇰🇷 한국어", "ko-KR-InJoonNeural"),
+    "hi": ("🇮🇳 हिन्दी", "hi-IN-MadhurNeural"),
+    "ur": ("🇵🇰 اردو", "ur-PK-AsadNeural"),
+    "fa": ("🇮🇷 فارسی", "fa-IR-FaridNeural"),
+    "ps": ("🇦🇫 پښتو", "ps-AF-GulNawazNeural"),
+    "kk": ("🇰🇿 Қазақша", "kk-KZ-DauletNeural"),
+    "az": ("🇦🇿 Azərbaycan", "az-AZ-BabekNeural"),
+    "tg": ("🇹🇯 Тоҷикӣ", "tg-TJ-AbdullaNeural"),
+    "ky": ("🇰🇬 Кыргызча", "ky-KG-AigulNeural"),
+    "mn": ("🇲🇳 Монгол", "mn-MN-BataaNeural"),
+    "vi": ("🇻🇳 Tiếng Việt", "vi-VN-NamMinhNeural"),
+    "th": ("🇹🇭 ไทย", "th-TH-NiwatNeural"),
+    "ms": ("🇲🇾 Bahasa Melayu", "ms-MY-OsmanNeural"),
+    "fil": ("🇵🇭 Filipino", "fil-PH-AngeloNeural"),
+    "bn": ("🇧🇩 বাংলা", "bn-BD-PradeepNeural"),
+    "ta": ("🇮🇳 தமிழ்", "ta-IN-ValluvarNeural"),
+    "te": ("🇮🇳 తెలుగు", "te-IN-MohanNeural"),
+    "mr": ("🇮🇳 मराठी", "mr-IN-ManoharNeural"),
+    "gu": ("🇮🇳 ગુજરાતી", "gu-IN-NiranjanNeural"),
+    "kn": ("🇮🇳 ಕನ್ನಡ", "kn-IN-GaganNeural"),
+    "ml": ("🇮🇳 മലയാളം", "ml-IN-MidhunNeural"),
+    "ne": ("🇳🇵 नेपाली", "ne-NP-SagarNeural"),
+    "he": ("🇮🇱 עברית", "he-IL-AvriNeural"),
+    "el": ("🇬🇷 Ελληνικά", "el-GR-NestorasNeural"),
+    "pl": ("🇵🇱 Polski", "pl-PL-MarekNeural"),
+    "uk": ("🇺🇦 Українська", "uk-UA-OstapNeural"),
+    "cs": ("🇨🇿 Čeština", "cs-CZ-AntoninNeural"),
+    "sk": ("🇸🇰 Slovenčina", "sk-SK-LukasNeural"),
+    "ro": ("🇷🇴 Română", "ro-RO-EmilNeural"),
+    "hu": ("🇭🇺 Magyar", "hu-HU-TamasNeural"),
+    "bg": ("🇧🇬 Български", "bg-BG-BorislavNeural"),
+    "sr": ("🇷🇸 Српски", "sr-RS-NicholasNeural"),
+    "hr": ("🇭🇷 Hrvatski", "hr-HR-SreckoNeural"),
+    "sv": ("🇸🇪 Svenska", "sv-SE-MattiasNeural"),
+    "no": ("🇳🇴 Norsk", "nb-NO-FinnNeural"),
+    "fi": ("🇫🇮 Suomi", "fi-FI-HarriNeural"),
+    "da": ("🇩🇰 Dansk", "da-DK-JeppeNeural"),
+    "nl": ("🇳🇱 Nederlands", "nl-NL-MaartenNeural"),
+    "sw": ("🇰🇪 Kiswahili", "sw-KE-RafikiNeural"),
+    "am": ("🇪🇹 አማርኛ", "am-ET-AmehaNeural"),
+}
 
 
 def get_history_for_user(user_id: int):
@@ -76,18 +139,58 @@ async def handle_voice(message: Message) -> None:
 
 @dp.message(F.video)
 async def handle_video(message: Message) -> None:
-    await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_VIDEO)
+    """Video kelganda, avval nima qilishni so'raymiz: subtitr yoki dublyaj."""
     file = await bot.get_file(message.video.file_id)
     video_path = f"/tmp/{message.video.file_id}.mp4"
-    audio_path = f"/tmp/{message.video.file_id}.wav"
-    ass_path = f"/tmp/{message.video.file_id}.ass"
-    output_path = f"/tmp/{message.video.file_id}_out.mp4"
-
     await bot.download_file(file.file_path, destination=video_path)
 
-    try:
-        await message.answer("Video tahlil qilinyapti, biroz kuting ⏳")
+    user_videos[message.from_user.id] = video_path
 
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📝 Subtitr qo'sh", callback_data="action:subtitle")
+    builder.button(text="🌍 Tilini o'zgartir (dublyaj)", callback_data="action:dub")
+    builder.adjust(1)
+
+    await message.answer("Video qabul qilindi. Nima qilay?", reply_markup=builder.as_markup())
+
+
+@dp.callback_query(F.data == "action:subtitle")
+async def handle_subtitle_choice(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.edit_text("Subtitr tayyorlanmoqda, biroz kuting ⏳")
+    await run_subtitle(callback.from_user.id)
+
+
+@dp.callback_query(F.data == "action:dub")
+async def handle_dub_choice(callback: CallbackQuery) -> None:
+    await callback.answer()
+    builder = InlineKeyboardBuilder()
+    for code, (name, _) in VOICE_MAP.items():
+        builder.button(text=name, callback_data=f"lang:{code}")
+    builder.adjust(3)
+    await callback.message.edit_text("Qaysi tilga o'girib beray?", reply_markup=builder.as_markup())
+
+
+@dp.callback_query(F.data.startswith("lang:"))
+async def handle_lang_choice(callback: CallbackQuery) -> None:
+    await callback.answer()
+    target_lang = callback.data.split(":")[1]
+    await callback.message.edit_text("Dublyaj tayyorlanmoqda, bu biroz vaqt olishi mumkin ⏳")
+    await run_dub(callback.from_user.id, target_lang)
+
+
+async def run_subtitle(user_id: int) -> None:
+    """Mavjud .ass-asosli subtitr yozish funksiyasi (avvalgi kod bilan bir xil mantiq)."""
+    video_path = user_videos.get(user_id)
+    if not video_path:
+        await bot.send_message(user_id, "Avval video yuboring.")
+        return
+
+    audio_path = video_path.replace(".mp4", ".wav")
+    ass_path = video_path.replace(".mp4", ".ass")
+    output_path = video_path.replace(".mp4", "_out.mp4")
+
+    try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-i", video_path, "-ar", "16000", "-ac", "1", audio_path,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
@@ -130,14 +233,67 @@ Format: Layer, Start, End, Style, Text
         )
         await proc.wait()
 
-        await message.answer_video(FSInputFile(output_path), caption="📝 Tayyor!")
+        await bot.send_video(user_id, FSInputFile(output_path), caption="📝 Tayyor!")
     except Exception:
         logging.exception("Videoni qayta ishlashda xatolik")
-        await message.answer("Uzr, videoni qayta ishlashda muammo bo'ldi.")
+        await bot.send_message(user_id, "Uzr, videoni qayta ishlashda muammo bo'ldi.")
     finally:
         for p in (video_path, audio_path, ass_path, output_path):
             if os.path.exists(p):
                 os.remove(p)
+        user_videos.pop(user_id, None)
+
+
+async def run_dub(user_id: int, target_lang: str) -> None:
+    """Videoni transkript qilib, tarjima qilib, yangi tilda dublyaj qo'shadi."""
+    video_path = user_videos.get(user_id)
+    if not video_path:
+        await bot.send_message(user_id, "Avval video yuboring.")
+        return
+
+    audio_path = video_path.replace(".mp4", ".wav")
+    tts_path = video_path.replace(".mp4", f"_{target_lang}.mp3")
+    output_path = video_path.replace(".mp4", f"_dub_{target_lang}.mp4")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", video_path, "-ar", "16000", "-ac", "1", audio_path,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+
+        # 1) Asl tildagi matnni olish (til avtomatik aniqlanadi)
+        segments, info = await asyncio.to_thread(whisper_model.transcribe, audio_path)
+        original_text = " ".join(seg.text.strip() for seg in segments)
+
+        # 2) Tarjima qilish
+        translated_text = await asyncio.to_thread(
+            GoogleTranslator(source=info.language, target=target_lang).translate,
+            original_text,
+        )
+
+        # 3) Tarjimani ovozga aylantirish (edge-tts)
+        _, voice = VOICE_MAP[target_lang]
+        communicate = edge_tts.Communicate(translated_text, voice)
+        await communicate.save(tts_path)
+
+        # 4) Yangi ovozni videoga joylash (video o'zgarishsiz, faqat audio almashtiriladi)
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", video_path, "-i", tts_path,
+            "-c:v", "copy", "-map", "0:v:0", "-map", "1:a:0", "-shortest", output_path,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+
+        await bot.send_video(user_id, FSInputFile(output_path), caption="🎬 Tayyor!")
+    except Exception:
+        logging.exception("Dublyaj qilishda xatolik")
+        await bot.send_message(user_id, "Uzr, dublyaj qilishda muammo bo'ldi.")
+    finally:
+        for p in (video_path, audio_path, tts_path, output_path):
+            if os.path.exists(p):
+                os.remove(p)
+        user_videos.pop(user_id, None)
 
 
 @dp.message()
@@ -172,4 +328,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())        
+    asyncio.run(main())
+       
