@@ -3,4 +3,3 @@ openai
 faster-whisper
 deep-translator
 edge-tts
-ffmpeg-python
